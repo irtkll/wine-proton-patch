@@ -1,0 +1,132 @@
+diff --git a/loader/wine.inf.in b/loader/wine.inf.in
+index 91baab34457..82189539114 100644
+--- a/loader/wine.inf.in
++++ b/loader/wine.inf.in
+@@ -526,24 +526,14 @@ HKLM,%FontSubStr%,"Times New Roman TUR,162",,"Times New Roman,162"
+ HKLM,System\CurrentControlSet\Hardware Profiles\Current\Software\Fonts,"LogPixels",0x10003,0x00000060
+ HKLM,%FontsNT%,"Arial (TrueType)",,"arial.ttf"
+ HKLM,%FontsNT%,"Arial Bold (TrueType)",,"arialbd.ttf"
++HKLM,%FontsNT%,"Times New Roman (TrueType)",,"times.ttf"
+ HKLM,%FontsNT%,"Courier New (TrueType)",,"cour.ttf"
+-HKLM,%FontsNT%,"Courier New Bold (TrueType)",,"courbd.ttf"
+ HKLM,%FontsNT%,"Malgun Gothic (TrueType)",,"malgun.ttf"
+-HKLM,%FontsNT%,"Marlett (TrueType)",,"marlett.ttf"
+ HKLM,%FontsNT%,"Microsoft Sans Serif (TrueType)",,"micross.ttf"
+-HKLM,%FontsNT%,"MS Gothic (TrueType)",,"msgothic.ttc"
+-HKLM,%FontsNT%,"MS PGothic (TrueType)",,"msgothic.ttc"
+-HKLM,%FontsNT%,"MS UI Gothic (TrueType)",,"msgothic.ttc"
+ HKLM,%FontsNT%,"Microsoft YaHei (TrueType)",,"msyh.ttf"
++HKLM,%FontsNT%,"MS Gothic (TrueType)",,"msgothic.ttc"
+ HKLM,%FontsNT%,"Nirmala UI (TrueType)",,"nirmala.ttf"
+ HKLM,%FontsNT%,"SimSun (TrueType)",,"simsun.ttc"
+-HKLM,%FontsNT%,"NSimSun (TrueType)",,"simsun.ttc"
+-HKLM,%FontsNT%,"Symbol (TrueType)",,"symbol.ttf"
+-HKLM,%FontsNT%,"Tahoma (TrueType)",,"tahoma.ttf"
+-HKLM,%FontsNT%,"Tahoma Bold (TrueType)",,"tahomabd.ttf"
+-HKLM,%FontsNT%,"Times New Roman (TrueType)",,"times.ttf"
+-HKLM,%FontsNT%,"Webdings (TrueType)",,"webdings.ttf"
+-HKLM,%FontsNT%,"Wingdings (TrueType)",,"wingdings.ttf"
+ HKCU,Software\Wine\Fonts\Replacements,"Palatino Linotype",,"Times New Roman"
+ 
+ [MCI]
+
+diff --git a/dlls/kernelbase/debug.c b/dlls/kernelbase/debug.c
+index a143cdfdaa7..d3f22435f55 100644
+--- a/dlls/kernelbase/debug.c
++++ b/dlls/kernelbase/debug.c
+@@ -649,7 +649,7 @@ static BOOL start_debugger( EXCEPTION_POINTERS *epointers, HANDLE event )
+     startup.cb = sizeof(startup);
+     startup.dwFlags = STARTF_USESHOWWINDOW;
+     startup.wShowWindow = SW_SHOWNORMAL;
+-    ret = CreateProcessW( NULL, cmdline, NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW, env, NULL, &startup, &info );
++    ret = CreateProcessW( NULL, cmdline, NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT, env, NULL, &startup, &info );
+     FreeEnvironmentStringsW( env );
+ 
+     if (ret)
+
+
+diff --git a/programs/wineboot/wineboot.c b/programs/wineboot/wineboot.c
+index 4510d06c514..1e2a7b7b4c4 100644
+--- a/programs/wineboot/wineboot.c
++++ b/programs/wineboot/wineboot.c
+@@ -1458,6 +1458,64 @@ static BOOL start_services_process(void)
+     return TRUE;
+ }
+ 
++static void set_wait_dialog_text( HWND hwnd, HWND text, const WCHAR *string )
++{
++    RECT win_rect, old_rect, new_rect;
++    HDC hdc = GetDC( text );
++
++    GetClientRect( text, &old_rect );
++    new_rect = old_rect;
++    SelectObject( hdc, (HFONT)SendMessageW( text, WM_GETFONT, 0, 0 ));
++    DrawTextW( hdc, string, -1, &new_rect, DT_CALCRECT | DT_EDITCONTROL | DT_WORDBREAK | DT_NOPREFIX );
++    ReleaseDC( text, hdc );
++    if (new_rect.bottom > old_rect.bottom)
++    {
++        GetWindowRect( hwnd, &win_rect );
++        win_rect.bottom += new_rect.bottom - old_rect.bottom;
++        SetWindowPos( hwnd, 0, 0, 0, win_rect.right - win_rect.left, win_rect.bottom - win_rect.top,
++                      SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER );
++        SetWindowPos( text, 0, 0, 0, new_rect.right, new_rect.bottom,
++                      SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER );
++    }
++    SendMessageW( text, WM_SETTEXT, 0, (LPARAM)string );
++}
++
++static INT_PTR CALLBACK wait_dlgproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
++{
++    switch (msg)
++    {
++    case WM_INITDIALOG:
++        {
++            DWORD len, icon_size;
++            RECT rect;
++            WCHAR *buffer, text[1024];
++            const WCHAR *name = (WCHAR *)lp;
++            HICON icon;
++
++            GetClientRect( GetDlgItem( hwnd, IDC_WAITICON ), &rect );
++            icon_size = min( rect.right, rect.bottom );
++            icon = LoadImageW( 0, (LPCWSTR)IDI_WINLOGO, IMAGE_ICON, icon_size, icon_size, LR_SHARED );
++            SendDlgItemMessageW( hwnd, IDC_WAITICON, STM_SETICON, (WPARAM)icon, 0 );
++            SendDlgItemMessageW( hwnd, IDC_WAITTEXT, WM_GETTEXT, 1024, (LPARAM)text );
++            len = lstrlenW(text) + lstrlenW(name) + 1;
++            buffer = malloc( len * sizeof(WCHAR) );
++            swprintf( buffer, len, text, name );
++            set_wait_dialog_text( hwnd, GetDlgItem( hwnd, IDC_WAITTEXT ), buffer );
++            free( buffer );
++        }
++        break;
++    }
++    return 0;
++}
++
++static HWND show_wait_window(void)
++{
++    HWND hwnd = CreateDialogParamW( GetModuleHandleW(0), MAKEINTRESOURCEW(IDD_WAITDLG), 0,
++                                    wait_dlgproc, (LPARAM)prettyprint_configdir() );
++    ShowWindow( hwnd, SW_SHOWNORMAL );
++    return hwnd;
++}
++
+ static HANDLE start_rundll32( const WCHAR *inf_path, const WCHAR *install, WORD machine )
+ {
+     WCHAR app[MAX_PATH + ARRAY_SIZE(L"\\rundll32.exe" )];
+@@ -1605,6 +1663,7 @@ static void update_wineprefix( BOOL force )
+ 
+         if ((process = start_rundll32( inf_path, L"PreInstall", IMAGE_FILE_MACHINE_TARGET_HOST )))
+         {
++            HWND hwnd = show_wait_window();
+             for (;;)
+             {
+                 if (process)
+@@ -1625,6 +1684,7 @@ static void update_wineprefix( BOOL force )
+                     process = start_rundll32( inf_path, L"Wow64Install", machines[count].Machine );
+                 count++;
+             }
++            DestroyWindow( hwnd );
+         }
+         install_root_pnp_devices();
+         update_user_profile();
